@@ -1,6 +1,6 @@
 " =======================================================================
 " File:        quicksilver.vim
-" Version:     0.2.7
+" Version:     0.3.0
 " Description: VIM plugin that provides a fast way to open files.
 " Maintainer:  Bogdan Popa <popa.bogdanp@gmail.com>
 " License:     Copyright (C) 2011 Bogdan Popa
@@ -44,10 +44,11 @@ import vim
 from glob import glob
 
 class Quicksilver(object):
-    def __init__(self):
+    def __init__(self, match_fn='normal'):
+        self.set_match_fn(match_fn)
         self.cwd = '{0}/'.format(os.getcwd())
-        self.match_fn = self.fuzzy_match
         self.ignore_case = True
+        self.match_index = 0
 
     def _cmp_files(self, x, y):
         "Files not starting with '.' come first."
@@ -61,7 +62,7 @@ class Quicksilver(object):
 
     def toggle_ignore_case(self):
         self.ignore_case = not self.ignore_case
-        self.update('')
+        self.update()
 
     def normalize_case(self, filename):
         pattern = self.pattern
@@ -77,51 +78,75 @@ class Quicksilver(object):
         pattern, filename = self.normalize_case(filename)
         return pattern in filename
 
-    def update_match_fn(self, type_):
+    def set_match_fn(self, fn):
         try:
             self.match_fn = {
                 'fuzzy': self.fuzzy_match,
                 'normal': self.normal_match,
-            }[type_]
+            }[fn]
         except KeyError:
-            self.match_fn = self.fuzzy_match
+            self.match_fn = self.normal_match
 
     def set_fuzzy_matching(self):
-        self.update_match_fn('fuzzy')
-        self.update('')
+        self.set_match_fn('fuzzy')
+        self.update()
 
     def set_normal_matching(self):
-        self.update_match_fn('normal')
-        self.update('')
+        self.set_match_fn('normal')
+        self.update()
 
     def get_files(self):
         for f in os.listdir(self.cwd):
             path = os.path.join(self.cwd, f)
             yield '{0}/'.format(f) if os.path.isdir(path) else f
 
+    def index_files(self, files):
+        """Returns a list of files with the item at index
+        'matched_index' at the front."""
+        try:
+            current = [files[self.match_index]]
+            up_to_current = files[:self.match_index]
+            after_current = files[self.match_index + 1:]
+            return current + after_current + up_to_current
+        except IndexError:
+            self.match_index = 0
+            return files
+
+    def decrease_index(self):
+        if self.match_index > 0:
+            self.match_index -= 1
+        self.update(cmi=False)
+
+    def increase_index(self):
+        self.match_index += 1
+        self.update(cmi=False)
+
+    def reset_match_index(self):
+        self.match_index = 0
+
     def match_files(self):
         files = sorted([f for f in self.get_files() if self.match_fn(f)],
                        cmp=self._cmp_files)
         if not self.pattern and self.cwd != '/':
             files.insert(0, '../')
-        return files
+        return self.index_files(files)
 
     def get_matched_file(self):
         return self.match_files()[0]
 
     def clear(self):
         self.pattern = ''
-        self.update('')
+        self.update()
 
     def clear_character(self):
         self.pattern = self.pattern[:-1]
-        self.update('')
+        self.update()
 
     def clear_pattern(self):
         if not self.pattern:
             self.cwd = self.get_up_dir(self.cwd + '/')
         self.pattern = ''
-        self.update('')
+        self.update()
 
     def close_buffer(self):
         vim.command('{0} wincmd w'.format(
@@ -130,13 +155,14 @@ class Quicksilver(object):
         vim.command('bd!')
 
     def glob_paths(self):
-        P = []
+        paths = []
         for path in glob(self.rel(self.pattern)):
             if not os.path.isdir(path):
-                P.append(self.rel(path))
-        return P
+                paths.append(self.rel(path))
+        return paths
 
     def get_up_dir(self, path):
+        self.reset_match_index()
         return '/'.join(path.split('/')[:-3]) + '/'
 
     def rel(self, path):
@@ -153,7 +179,8 @@ class Quicksilver(object):
         vim.command('normal {0}|'.format(self.get_cursor_location()))
         vim.command('startinsert')
 
-    def update(self, c):
+    def update(self, c='', cmi=True):
+        if cmi: self.matched_index = 0
         self.pattern += c
         files_string = ' | '.join(f for f in self.match_files())
         vim.command('normal ggdG')
@@ -191,14 +218,20 @@ class Quicksilver(object):
 
     def open(self):
         path = self.build_path()
+        self.reset_match_index()
         if isinstance(path, list): self.open_list(path)
         elif os.path.isdir(path): self.open_dir(path)
         else: self.open_file(path)
-
-quicksilver = Quicksilver()
 EOF
 "}}}
 "{{{ Public interface
+"{{{ Initialize Quicksilver object
+if exists('g:QSMatchFn')
+    python quicksilver = Quicksilver(vim.eval('g:QSMatchFn'))
+else
+    python quicksilver = Quicksilver()
+endif
+"}}}
 function! s:MapKeys() "{{{
     imap <silent><buffer><SPACE> :python quicksilver.update(' ')<CR>
     map  <silent><buffer><C-c> :python quicksilver.close_buffer()<CR>
@@ -210,8 +243,10 @@ function! s:MapKeys() "{{{
     imap <silent><buffer><C-n> :python quicksilver.set_normal_matching()<CR>
     map  <silent><buffer><C-t> :python quicksilver.toggle_ignore_case()<CR>
     imap <silent><buffer><C-t> :python quicksilver.toggle_ignore_case()<CR>
-    map  <silent><buffer><TAB> :python quicksilver.open()<CR>
-    imap <silent><buffer><TAB> :python quicksilver.open()<CR>
+    map  <silent><buffer><TAB> :python quicksilver.increase_index()<CR>
+    imap <silent><buffer><TAB> :python quicksilver.increase_index()<CR>
+    map  <silent><buffer><S-TAB> :python quicksilver.decrease_index()<CR>
+    imap <silent><buffer><S-TAB> :python quicksilver.decrease_index()<CR>
     imap <silent><buffer><BAR> :python quicksilver.update('\|')<CR>
     map  <silent><buffer><CR> :python quicksilver.open()<CR>
     imap <silent><buffer><CR> :python quicksilver.open()<CR>
@@ -318,7 +353,7 @@ function! s:SetIgnoreCase(value) "{{{
     python quicksilver.set_ignore_case(vim.eval('a:value'))
 endfunction "}}}
 function! s:SetMatchFn(type) "{{{
-    python quicksilver.update_match_fn(vim.eval('a:type'))
+    python quicksilver.set_match_fn(vim.eval('a:type'))
 endfunction "}}}
 function! s:ActivateQS() "{{{
     execute 'bo 2 new __Quicksilver__'
@@ -326,9 +361,6 @@ function! s:ActivateQS() "{{{
     setlocal wrap
     call s:MapKeys()
     call s:HighlightSuggestions()
-    if exists('g:QSMatchFn')
-        call s:SetMatchFn(g:QSMatchFn)
-    endif
 endfunction "}}}
 "{{{ Map <leader>q to ActivateQS
 if !hasmapto("<SID>ActivateQS")

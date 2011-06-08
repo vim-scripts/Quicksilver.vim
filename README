@@ -3,14 +3,10 @@ This is a mirror of http://www.vim.org/scripts/script.php?script_id=3617
 Quicksilver is a VIM plugin whose purpose is to quicken the process of
 opening files from inside VIM.
 
-# Github
-
-You can find it on github at https://github.com/Bogdanp/quicksilver.vim
-
 # Preview
 
-Screenshot: http://farm4.static.flickr.com/3383/5804126014_072806d823_z.jpg
 Video: http://www.youtube.com/watch?v=RDsey4YqpHs
+Screenshot: http://farm4.static.flickr.com/3383/5804126014_072806d823_z.jpg
 
 # Usage
 
@@ -19,7 +15,10 @@ insert mode. Typing any key will update the list of suggestions and
 pressing `CR` will open the first item in the suggestion list. Use `C-c`
 to quickly close the buffer.
 
-Pressing `Tab` or `CR` when there's no pattern will go up a directory.
+You may cycle through the suggestion list using `Tab` and `S-Tab`. `CR`
+will open the current suggestion (first item in the list).
+
+Pressing `CR` when there is no pattern will go up a directory.
 
 `C-w` clears the entire pattern. If there is no pattern, it will go up a
 directory.
@@ -27,9 +26,18 @@ directory.
 `C-t` toggles between if pattern and filename case should be ignored or
 not.
 
-`C-f` turns on `fuzzy matching`.
+`C-f` turns on `fuzzy matching`. Fuzzy matching will match any filename
+that contains every character in the given pattern, no matter the order
+of the characters. For example: the pattern `foo` will match `foo`, as
+well as `oof`, `ofo` and `foob`.
 
-`C-n` turns on `normal matching`.
+`C-n` turns on `normal matching`. Normal matching will match any
+filename that contains the exact phrase within it. For example: the
+pattern `foo` will match `foo` and `foob` but not `ofo` or `oof`.
+
+If you prefer fuzzy matching and would like Quicksilver to default to it
+instead of normal matching then you can add `let g:QSMatchFn = 'fuzzy'`
+to your `.vimrc`.
 
 If a file with the given pattern does not exist then it will be opened
 for editing. If a pattern ends in `/`, quicksilver will create a
@@ -44,3 +52,6 @@ have the extension `.md` in the CWD.
 
 * VIM 7.0+ compiled with +python
 * Python 2.6+
+
+[1]: http://github.com/tpope/vim-pathogen
+
