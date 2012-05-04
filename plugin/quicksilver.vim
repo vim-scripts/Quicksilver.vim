@@ -1,6 +1,6 @@
 " =======================================================================
 " File:        quicksilver.vim
-" Version:     0.3.1
+" Version:     0.4.0
 " Description: VIM plugin that provides a fast way to open files.
 " Maintainer:  Bogdan Popa <popa.bogdanp@gmail.com>
 " License:     Copyright (C) 2011 Bogdan Popa
@@ -39,22 +39,93 @@ let g:loaded_quicksilver = 1
 "{{{ Python code
 python <<EOF
 import os
+import sys
 import vim
 
+from collections import OrderedDict
 from glob import glob
 
+class QuicksilverConst(object):
+    # Files and folders that should never appear in the list of matches.
+    IGNORED = ("$Recycle.Bin",)
+    
+    # Platform-specific root directories.
+    if sys.platform == "win32":
+        ROOTS = ["{0}:\\".format(chr(drive)) for drive in range(ord("A"), ord("Z"))]
+    else:
+        ROOTS = (os.sep,)
+
+class QuicksilverUtil(object):
+    @classmethod
+    def ordered_set(cls, string):
+        "Builds a fake ordered set."
+        return OrderedDict((c, True) for c in string).keys()
+
+    @classmethod
+    def compare_files(cls, first, second):
+        """Compares two file names so that files that start with a dot are
+        heavier than normal files."""
+        if first.startswith(".") and not \
+           second.startswith("."):
+           return 1
+        if not first.startswith(".") and \
+           second.startswith("."):
+           return -1
+        return cmp(first, second)
+
+    @classmethod
+    def update_cursor(cls, qs):
+        "Moves the cursor to the end of the pattern."
+        vim.command("normal gg")
+        vim.command("normal {0}|".format(len(qs.rel(qs.pattern)) + 1))
+        vim.command("startinsert")
+
+    @classmethod
+    def close_buffer(cls):
+        "Closes the current VIM buffer."
+        vim.command("{0} wincmd w".format(
+            vim.eval('bufwinnr("__Quicksilver__")')
+        ))
+        vim.command("bd!")
+        vim.command("exe g:QSRestoreWindows")
+        vim.command("unlet g:QSRestoreWindows")
+        vim.command("wincmd p")
+
+    @classmethod
+    def edit(cls, path):
+        "Opens the given path for editing."
+        vim.command("edit {0}".format(path))
+
+    @classmethod
+    def cd(cls, path):
+        "Changed the VIM working dir to the given path."
+        vim.command("cd {0}".format(path))
+
+class QuicksilverMatcher(object):
+    @classmethod
+    def fuzzy(cls, qs, filename):
+        """Applies an ordered fuzzy match on the given filename.
+        Given the pattern "rdm", it matches "Readme.md" but not "Remade.md"."""
+        pattern, filename = qs.normalize_case(filename)
+        for item in QuicksilverUtil.ordered_set(pattern):
+            pos = filename.find(item)
+            if filename and pos == -1:
+                return False
+            filename = filename[pos:]
+        return True
+
+    @classmethod
+    def normal(cls, qs, filename):
+        "Matches any file that contains the pattern."
+        pattern, filename = qs.normalize_case(filename)
+        return pattern in filename
+
 class Quicksilver(object):
-    def __init__(self, match_fn='normal'):
-        self.set_match_fn(match_fn)
-        self.cwd = '{0}/'.format(os.getcwd())
+    def __init__(self, matcher='normal'):
+        self.set_matcher(matcher)
+        self.cwd = "{0}{1}".format(os.getcwd(), os.sep)
         self.ignore_case = True
         self.match_index = 0
-
-    def _cmp_files(self, x, y):
-        "Files not starting with '.' come first."
-        if x[0] == '.' and y[0] != '.': return 1
-        if x[0] != '.' and y[0] == '.': return -1
-        else: return cmp(x, y)
 
     def set_ignore_case(self, value):
         try: self.ignore_case = int(value)
@@ -70,39 +141,41 @@ class Quicksilver(object):
             return pattern.lower(), filename.lower()
         return pattern, filename
 
-    def fuzzy_match(self, filename):
-        pattern, filename = self.normalize_case(filename)
-        return set(pattern).issubset(set(filename))
-
-    def normal_match(self, filename):
-        pattern, filename = self.normalize_case(filename)
-        return pattern in filename
-
-    def set_match_fn(self, fn):
+    def set_matcher(self, function):
+        """Given the name of a matcher function to use, it tries to set that
+        function as the default; if it fails it falls back to the default
+        matcher."""
         try:
-            self.match_fn = {
-                'fuzzy': self.fuzzy_match,
-                'normal': self.normal_match,
-            }[fn]
-        except KeyError:
-            self.match_fn = self.normal_match
-
-    def set_fuzzy_matching(self):
-        self.set_match_fn('fuzzy')
-        self.update()
-
-    def set_normal_matching(self):
-        self.set_match_fn('normal')
-        self.update()
+            self.matcher = getattr(QuicksilverMatcher, function)
+        except AttributeError:
+            self.matcher = QuicksilverMatcher.normal
 
     def get_files(self):
-        for f in os.listdir(self.cwd):
-            path = os.path.join(self.cwd, f)
-            yield '{0}/'.format(f) if os.path.isdir(path) else f
+        """Runs the matcher agains every files in the cwd and returns those that
+        passed. It also sorts the matched files."""
+        files = []
+        for filename in os.listdir(self.cwd):
+            if not self.matcher(self, filename): continue
+            if filename in QuicksilverConst.IGNORED: continue
+            if os.path.isdir(self.rel(filename)):
+                filename = "{0}{1}".format(filename, os.sep)
+            files.append(filename)
+        return sorted(files, cmp=QuicksilverUtil.compare_files)
+
+    def match_files(self):
+        "Gets and indexes the matched files."
+        files = self.get_files()
+        if not self.pattern and self.cwd.upper() not in QuicksilverConst.ROOTS:
+            files.insert(0, ".." + os.sep)
+        return self.index_files(files)
+
+    def get_matched_file(self):
+        "Returns the top match for the current pattern."
+        return self.match_files()[0]
 
     def index_files(self, files):
-        """Returns a list of files with the item at index
-        'matched_index' at the front."""
+        """Returns a list of files with the item at index 'matched_index' at
+        the front."""
         try:
             current = [files[self.match_index]]
             up_to_current = files[:self.match_index]
@@ -124,18 +197,8 @@ class Quicksilver(object):
     def reset_match_index(self):
         self.match_index = 0
 
-    def match_files(self):
-        files = sorted([f for f in self.get_files() if self.match_fn(f)],
-                       cmp=self._cmp_files)
-        if not self.pattern and self.cwd != '/':
-            files.insert(0, '../')
-        return self.index_files(files)
-
-    def get_matched_file(self):
-        return self.match_files()[0]
-
     def clear(self):
-        self.pattern = ''
+        self.pattern = ""
         self.update()
 
     def clear_character(self):
@@ -144,15 +207,9 @@ class Quicksilver(object):
 
     def clear_pattern(self):
         if not self.pattern:
-            self.cwd = self.get_up_dir(self.cwd + '/')
-        self.pattern = ''
+            self.cwd = self.get_parent_dir(self.cwd + os.sep)
+        self.pattern = ""
         self.update()
-
-    def close_buffer(self):
-        vim.command('{0} wincmd w'.format(
-            vim.eval('bufwinnr("__Quicksilver__")')
-        ))
-        vim.command('bd!')
 
     def glob_paths(self):
         paths = []
@@ -161,44 +218,40 @@ class Quicksilver(object):
                 paths.append(self.rel(path))
         return paths
 
-    def get_up_dir(self, path):
+    def get_parent_dir(self, path):
         self.reset_match_index()
-        return '/'.join(path.split('/')[:-3]) + '/'
+        return os.sep.join(path.split(os.sep)[:-3]) + os.sep
 
     def rel(self, path):
         return self.sanitize_path(os.path.join(self.cwd, path))
 
     def sanitize_path(self, path):
-        return path.replace(' ', '\ ')
+        "TODO: Figure out if this is actually needed on Linux at all."
+        if sys.platform == "win32":
+            return path
+        return path.replace(" ", "\\ ")
 
-    def get_cursor_location(self):
-        return len(self.rel(self.pattern)) + 1
-
-    def update_cursor(self):
-        vim.command('normal gg')
-        vim.command('normal {0}|'.format(self.get_cursor_location()))
-        vim.command('startinsert')
-
-    def update(self, c='', cmi=True):
+    def update(self, c="", cmi=True):
         if cmi: self.matched_index = 0
         self.pattern += c
-        files_string = ' | '.join(f for f in self.match_files())
-        vim.command('normal ggdG')
-        vim.current.line = '{0}{1} {{{2}}}'.format(
+        files_string = " | ".join(f for f in self.match_files())
+        vim.command("normal ggdG")
+        vim.current.line = "{0}{1} {{{2}}}".format(
             self.cwd, self.pattern, files_string
         )
-        self.update_cursor()
+        QuicksilverUtil.update_cursor(self)
 
     def build_path(self):
         try:
             path = self.rel(self.get_matched_file())
-            if self.get_matched_file() == '../':
-                return self.get_up_dir(path)
+            if self.get_matched_file() == ".." + os.sep:
+                return self.get_parent_dir(path)
         except IndexError:
             path = self.rel(self.pattern)
-            if self.pattern.endswith('/'): os.mkdir(path)
-            if self.pattern.startswith('*')\
-            or self.pattern.endswith('*'):
+            if self.pattern.endswith(os.sep):
+                os.mkdir(path)
+            if self.pattern.startswith("*") \
+            or self.pattern.endswith("*"):
                 return self.glob_paths()
         return path
 
@@ -207,25 +260,28 @@ class Quicksilver(object):
         else: self.increase_index()
 
     def open_list(self, paths):
-        self.close_buffer()
+        QuicksilverUtil.close_buffer()
         for path in paths:
-            vim.command('edit {0}'.format(path))
+            QuicksilverUtil.edit(path)
 
     def open_dir(self, path):
         self.cwd = path
         self.clear()
-        self.update_cursor()
+        QuicksilverUtil.update_cursor(self)
+        QuicksilverUtil.cd(path)
 
     def open_file(self, path):
-        self.close_buffer()
-        vim.command('edit {0}'.format(path))
+        QuicksilverUtil.close_buffer()
+        QuicksilverUtil.edit(path)
 
     def open(self):
         path = self.build_path()
         self.reset_match_index()
-        if isinstance(path, list): self.open_list(path)
-        elif os.path.isdir(path): self.open_dir(path)
-        else: self.open_file(path)
+        if isinstance(path, list):
+            return self.open_list(path)
+        if os.path.isdir(path): 
+            return self.open_dir(path)
+        return self.open_file(path)
 EOF
 "}}}
 "{{{ Public interface
@@ -238,13 +294,13 @@ endif
 "}}}
 function! s:MapKeys() "{{{
     imap <silent><buffer><SPACE> :python quicksilver.update(' ')<CR>
-    map  <silent><buffer><C-c> :python quicksilver.close_buffer()<CR>
-    imap <silent><buffer><C-c> :python quicksilver.close_buffer()<CR>
+    map  <silent><buffer><C-c> :python QuicksilverUtil.close_buffer()<CR>
+    imap <silent><buffer><C-c> :python QuicksilverUtil.close_buffer()<CR>
     imap <silent><buffer><C-w> :python quicksilver.clear_pattern()<CR>
-    map  <silent><buffer><C-f> :python quicksilver.set_fuzzy_matching()<CR>
-    imap <silent><buffer><C-f> :python quicksilver.set_fuzzy_matching()<CR>
-    map  <silent><buffer><C-n> :python quicksilver.set_normal_matching()<CR>
-    imap <silent><buffer><C-n> :python quicksilver.set_normal_matching()<CR>
+    map  <silent><buffer><C-f> :python quicksilver.set_matcher("fuzzy")<CR>
+    imap <silent><buffer><C-f> :python quicksilver.set_matcher("fuzzy")<CR>
+    map  <silent><buffer><C-n> :python quicksilver.set_matcher("normal")<CR>
+    imap <silent><buffer><C-n> :python quicksilver.set_matcher("normal")<CR>
     map  <silent><buffer><C-t> :python quicksilver.toggle_ignore_case()<CR>
     imap <silent><buffer><C-t> :python quicksilver.toggle_ignore_case()<CR>
     map  <silent><buffer><TAB> :python quicksilver.open_on_tab()<CR>
@@ -357,9 +413,10 @@ function! s:SetIgnoreCase(value) "{{{
     python quicksilver.set_ignore_case(vim.eval('a:value'))
 endfunction "}}}
 function! s:SetMatchFn(type) "{{{
-    python quicksilver.set_match_fn(vim.eval('a:type'))
+    python quicksilver.set_matcher(vim.eval('a:type'))
 endfunction "}}}
 function! s:ActivateQS() "{{{
+    let g:QSRestoreWindows = winrestcmd()
     execute 'bo 2 new __Quicksilver__'
     python quicksilver.clear()
     setlocal wrap
