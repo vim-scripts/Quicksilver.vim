@@ -1,6 +1,6 @@
 " =======================================================================
 " File:        quicksilver.vim
-" Version:     0.4.4
+" Version:     0.4.5
 " Description: VIM plugin that provides a fast way to open files.
 " Maintainer:  Bogdan Popa <popa.bogdanp@gmail.com>
 " License:     Copyright (C) 2011 Bogdan Popa
@@ -492,7 +492,7 @@ if !hasmapto("<SID>ActivateQS")
 endif
 "}}}
 "{{{ Expose public functions
-command! -nargs=0 QSActivate    call s:QSActivate()
+command! -nargs=0 QSActivate    call s:ActivateQS()
 command! -nargs=1 QSSetIC       call s:SetIgnoreCase(<args>)
 command! -nargs=1 QSSetMatchFn  call s:SetMatchFn(<args>)
 command! -nargs=0 QSChangeDrive call s:ChangeDrive()
