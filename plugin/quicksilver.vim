@@ -1,6 +1,6 @@
 " =======================================================================
 " File:        quicksilver.vim
-" Version:     0.4.2
+" Version:     0.4.4
 " Description: VIM plugin that provides a fast way to open files.
 " Maintainer:  Bogdan Popa <popa.bogdanp@gmail.com>
 " License:     Copyright (C) 2011 Bogdan Popa
@@ -34,20 +34,38 @@
 if exists("g:loaded_quicksilver") || !has("python") || &cp
     finish
 endif
+if !exists("g:QSIgnore")
+    let g:QSIgnore = ""
+endif
 let g:loaded_quicksilver = 1
 "}}}
 "{{{ Python code
 python <<EOF
 import glob
 import os
+import re
 import sys
 import vim
 
 from collections import OrderedDict
 
 class QuicksilverConst(object):
+    # Users may set a global variable containing regexps of filenames that
+    # should be ignored. For example, to ignore .pyc and .swp files, one
+    # could add the following line to their .vimrc file:
+    #   let g:QSIgnore = "\\.pyc$;\\.swp$"
+    #
+    # This feature was inspired by obmarg's (https://github.com/obmarg) fork.
+    USER_IGNORED = vim.eval("g:QSIgnore").split(";")
+
+    # Since g:QSIgnore might be empty USER_IGNORED could take the form ['']
+    # which is something we don't want since the empty string regexp will match
+    # all filenames. This accounts for that special case.
+    if len(USER_IGNORED) == 1 and not USER_IGNORED[0]:
+        USER_IGNORED = []
+
     # Files and folders that should never appear in the list of matches.
-    IGNORED = ("^\\$Recycle\\.Bin$", ".*\\.sw*")
+    IGNORED = ["^\\$Recycle\\.Bin$", ".*\\.sw*"] + USER_IGNORED
     
     # Platform-specific root directories.
     if sys.platform == "win32":
@@ -142,6 +160,16 @@ class Quicksilver(object):
         self.cwd = "{0}{1}".format(os.getcwd(), os.sep)
         self.ignore_case = True
         self.index = 0
+
+    def change_drive(self, drive):
+        "Change the drive on Windows systems."
+        drive = "{0}:\\".format(drive.upper())
+        if sys.platform != 'win32' \
+        or not os.path.isdir(drive):
+            return
+        self.clear()
+        self.cwd = drive
+        self.update()
 
     def set_ignore_case(self, ignore_case):
         "Setter for the ignore_case property."
@@ -446,6 +474,9 @@ endfunction "}}}
 function! s:SetMatchFn(type) "{{{
     python quicksilver.set_matcher(vim.eval('a:type'))
 endfunction "}}}
+function! s:ChangeDrive() "{{{
+    python quicksilver.change_drive(vim.eval('input("Enter a drive letter: ")'))
+endfunction "}}}
 function! s:ActivateQS() "{{{
     let g:QSRestoreWindows = winrestcmd()
     execute 'bo 2 new'
@@ -461,9 +492,10 @@ if !hasmapto("<SID>ActivateQS")
 endif
 "}}}
 "{{{ Expose public functions
-command! -nargs=0 QSActivate   call s:QSActivate()
-command! -nargs=1 QSSetIC      call s:SetIgnoreCase(<args>)
-command! -nargs=1 QSSetMatchFn call s:SetMatchFn(<args>)
+command! -nargs=0 QSActivate    call s:QSActivate()
+command! -nargs=1 QSSetIC       call s:SetIgnoreCase(<args>)
+command! -nargs=1 QSSetMatchFn  call s:SetMatchFn(<args>)
+command! -nargs=0 QSChangeDrive call s:ChangeDrive()
 "}}}
 "}}}
 " vim:fdm=marker
